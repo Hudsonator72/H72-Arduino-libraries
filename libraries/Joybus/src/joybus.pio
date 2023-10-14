@@ -1,0 +1,61 @@
+;; --------------------------------- ;;
+;;           Joybus Library          ;;
+;; --------------------------------- ;;
+;
+;   Created by Hudsonator72 (https://github.com/Hudsonator72)
+;
+;   Used for connecting to joybus accessories (N64, GCN, GBA)
+;   Beware that the different accessories often use different commands
+;
+;   Heres a good resource: (not by me)
+;       https://sites.google.com/site/consoleprotocols/home/nintendo-joy-bus-documentation
+
+
+
+.program joybus
+.side_set 1 opt pindirs
+
+    jmp WAIT_NEW_CMD            ;   1   Skip inital data send
+SEND_DATA:
+    push block                  ;   1   Send data to the Pico
+WAIT_NEW_CMD:
+    pull block                  ;   1   Get input bytes
+    out null 24                 ;   1   Ignore all but the command byte
+    set pins 0                  ;   1   Initialize the pin to pull the data line low
+
+NEXT_BIT:   ; Send next bit
+    out x 1                     ;   1   Grab first bit
+    jmp !x BIT_0        side 1  ;   1   Jump to sending 0 if bit is 0; pull data line low
+BIT_1:  ; Send 1
+    nop                 side 0  ;   1   Release data line back to high
+    jmp BIT_END                 ;   1   Jump to end of sending current bit
+BIT_0:  ; Send 0
+    nop [1]                     ;   2   Leave data line pulled low for 2 cycles
+BIT_END:    ; End the bit; if no more bits, end the command
+    jmp !osre NEXT_BIT  side 0  ;   1   Jump to send next bit if theres still data left; release data line back to high
+    nop                 side 1  ;   1   Pull data line low for 1 cycle; start console stop bit
+    nop [2]             side 0  ;   2   Release data line to high for 2 cycles to end console stop bit and wait into the response
+READ_RESPONSE:
+.wrap_target
+    mov x !pins                 ;   1   Read response to reg. x 1 μs into the bit
+    mov y pins                  ;   1   Read response to reg. y 2 μs into the bit
+    jmp x!=y WAIT_NEW_CMD      ;   1   If the two readings match, end and push data. Else, continue reading
+    in x 1
+.wrap
+
+% c-sdk {
+static inline void joybus_program_init(PIO pio, uint sm, uint offset, uint pin) {
+    pio_sm_config c = joybus_program_get_default_config(offset);
+
+    sm_config_set_in_pins(&c, pin);
+    sm_config_set_sideset_pins(&c, pin);
+
+    pio_gpio_init(pio, pin);
+
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false);
+
+    pio_sm_init(pio, sm, offset, &c);
+
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
